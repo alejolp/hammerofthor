@@ -311,7 +311,7 @@ class ThorFactory(Factory):
     protocol = ThorProtocol
 
 def main():
-    reactor.listenTCP(8081, ThorFactory())
+    reactor.listenTCP(8081, ThorFactory(), interface='127.0.0.1')
     reactor.run()
 
 if __name__ == '__main__':
