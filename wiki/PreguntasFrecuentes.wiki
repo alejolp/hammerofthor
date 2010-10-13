@@ -2,9 +2,9 @@
 
 = Preguntas Frecuentes =
 
-Aquí voy dejando las preguntas que me van haciendo sobre «Hammer of Thor».
+Aquí voy dejando las preguntas que me van haciendo sobre «Hammer of Thor». Cualquier cosa mandame un mail a: *alejolp arroba alejolp.com.ar*.
 
-== ¿Cómo sé que está funcionando el Proxy? ==
+== ¿Cómo puedo saber si «Hammer of Thor» está funcionando? ==
 
 En la terminal deberán aparecer dos clases de mensajes:
 
@@ -14,3 +14,5 @@ En la terminal deberán aparecer dos clases de mensajes:
 El primer mensaje significa que Thor está intentando dialogar con el servidor remoto.
 
 El segundo mensaje significa que Thor detectó el paquete RST anómalo y está esperando a que el servidor remoto responda.
+
+== Pregunta xyz ==
