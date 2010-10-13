@@ -4,6 +4,12 @@
 
 Aquí voy dejando las preguntas que me van haciendo sobre «Hammer of Thor». Cualquier cosa mandame un mail a: *alejolp arroba alejolp.com.ar*.
 
+== Econtré un error en el programa, ¿qué hago? ==
+
+Por favor, [http://code.google.com/p/hammerofthor/issues/entry reportalo en el tracker] del proyecto:
+
+  * http://code.google.com/p/hammerofthor/issues/entry
+
 == ¿Cómo puedo saber si «Hammer of Thor» está funcionando? ==
 
 En la terminal deberán aparecer dos clases de mensajes:
