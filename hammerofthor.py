@@ -137,7 +137,18 @@ class ThorProtocol(Protocol):
 
                 # FIXME: Solo Socks v5, comando CONNECT y conexiones IPv4.
                 #
-                if ver != 0x05 or cmd != 0x01 or rsv != 0x00 or atyp != 0x01:
+                if ver != 0x05 or rsv != 0x00:
+                    THOR_ERROR("Solo se aceptan conexiones SOCKS v5")
+                    self.transport.loseConnection()
+                    return
+
+                if cmd != 0x01:
+                    THOR_INFO("Solo se aceptan los comandos: CONNECT")
+                    self.transport.loseConnection()
+                    return
+
+                if atyp != 0x01:
+                    THOR_INFO("Solo se aceptan conexiones IPv4")
                     self.transport.loseConnection()
                     return
 
@@ -283,7 +294,7 @@ class ThorClientFactory(ClientFactory):
             self._thor_prot.transport.loseConnection()
             return
 
-        THOR_INFO("Thor is Waiting")
+        THOR_INFO("Thor esta esperando")
 
         if not self._thor_retry or self._thor_counter >= THOR_MAX_ATTEMPTS:
             self._thor_prot._sendSocksReply(0x05)
@@ -312,6 +323,7 @@ class ThorFactory(Factory):
 
 def main():
     reactor.listenTCP(8081, ThorFactory(), interface='127.0.0.1')
+    THOR_INFO("Thor esta a la escucha.")
     reactor.run()
 
 if __name__ == '__main__':
