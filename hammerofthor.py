@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-Hammer of Thor: Proxy SOCKS v5
+Hammer of Thor: Proxy SOCKS v4, v5
 
 Website: http://code.google.com/p/hammerofthor/
 Licencia: GNU GPL v3.
