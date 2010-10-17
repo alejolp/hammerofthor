@@ -55,43 +55,138 @@ THOR_PRINT_NULL = lambda *args, **kwargs: None
 
 THOR_ERROR = THOR_PRINT
 THOR_INFO = THOR_PRINT
-THOR_DEBUG = THOR_PRINT_NULL
+THOR_DEBUG = THOR_PRINT
+
+SOCKS5_REPLY_CMD_UNSUPPORTED = 0x07
+SOCKS5_ADDRESS_NOT_SUPPORTED = 0x08
+
+SOCKS4_REJECT = 91
+SOCKS4_GRANTED = 90
 
 def THOR_STOP():
     THOR_DEBUG("THOR_STOP")
     reactor.stop()
 
-class ThorProtocol(Protocol):
-    def __init__(self, *args, **kwargs):
-        # Estoy usando "_thor" de prefijo porque no conozco las variables de 
-        # instancia de Protocol.
+class ThorFatalException(Exception):
+    pass
 
-        self._thor_state = 0
+class TunnelHandlerBase(object):
+    def __init__(self, prot):
+        self.prot = prot
         self._thor_buffer_in = ""
-        self._thor_client_bytes = 0
-        self._thor_server_bytes = 0
-        self._thor_client = None
+
+    def dataReceived(self, data):
+        raise Exception("Not implemented")
+
+    def _handleData(self):
+        raise Exception("Not implemented")
+
+    def remoteConnectionMade(self):
+        raise Exception("Not implemented")
+
+    def isConnected(self):
+        raise Exception("Not implemented")
+
+    def _flushData(self):
+        self.prot.clientSendData(self._thor_buffer_in)
+        self._thor_buffer_in = ""
+
+class TunnelHandlerSocks4(TunnelHandlerBase):
+    def __init__(self, prot):
+        super(TunnelHandlerSocks4, self).__init__(prot)
+        self._thor_state = 0
 
     def dataReceived(self, data):
         self._thor_buffer_in += data
-        self._thor_client_bytes += len(data)
-        self._handleData()
 
-    def connectionMade(self):
-        pass
+        try:
+            self._handleData()
+        except ThorFatalException, e:
+            THOR_ERROR(e)
+            self.prot.transport.loseConnection()
 
-    def connectionLost(self, reason):
-        if self._thor_client is not None:
-            cli = self._thor_client
-            self._thor_client = None
-            cli.transport.loseConnection()
+    def _handleData(self):
+        # Estado 0: Esperando el welcome del cliente
+        if self._thor_state == 0:
+            THOR_DEBUG("Socks4: nueva conexion, data: ", repr(self._thor_buffer_in))
+            
+            count = len(self._thor_buffer_in)
+            data = self._thor_buffer_in
+
+            if count > 0 and ord(data[0]) != 0x04:
+                self._sendSocksReply(SOCKS4_REJECT)
+                raise ThorFatalException("Solo se aceptan conexiones SOCKSv4")
+
+            byte_count = 8
+            if len(self._thor_buffer_in) < byte_count:
+                THOR_DEBUG("Faltan datos, cant: ", count)
+                return
+
+            version, cmd, dest_port, dest_addr = struct.unpack(">BBHL",
+                self._thor_buffer_in[:byte_count])
+
+
+            if cmd != 0x01:
+                self._sendSocksReply(SOCKS4_REJECT)
+                raise ThorFatalException("Solo se acepta el comando: CONNECT")
+
+
+            null_pos = self._thor_buffer_in.find(chr(0), byte_count)
+            if null_pos == -1:
+                THOR_DEBUG("Faltan datos, cant: ", count)
+                return
+
+            byte_count = null_pos + 1
+
+            self._thor_buffer_in = self._thor_buffer_in[byte_count:]
+            self._thor_state = 1
+
+            dest_addr = socket.inet_ntoa(struct.pack(">L", dest_addr))
+            self.prot.connectRemoteTCP(dest_addr, dest_port)
+
+        # Estado 1: Esperando conexion remota
+        if self._thor_state == 1:
+            pass
+
+        # Estado 2: Tunel activo
+        if self._thor_state == 2:
+            self._flushData()
+
+    def remoteConnectionMade(self):
+        if self._thor_state == 1:
+            self._thor_state = 2
+            self._sendSocksReply(SOCKS4_GRANTED)
+        else:
+            THOR_ERROR("SOCKSv4: Estado invalido", self._thor_state)
+            THOR_STOP()
+
+    def _sendSocksReply(self, code):
+        self.prot.transport.write(struct.pack(">BBHL", 0x00, code, 0, 0))
+
+    def isConnected(self):
+        return self._thor_state == 2
+
+class TunnelHandlerSocks5(TunnelHandlerBase):
+    def __init__(self, prot):
+        super(TunnelHandlerSocks5, self).__init__(prot)
+        self._thor_state = 0
+        self._thor_buffer_in = ""
+
+    def dataReceived(self, data):
+        self._thor_buffer_in += data
+
+        try:
+            self._handleData()
+        except ThorFatalException, e:
+            THOR_ERROR(e)            
+            self.prot.transport.loseConnection()
 
     def _handleData(self):
         # Estado 0: esperando el welcome del cliente
 
         if self._thor_state == 0:
             if len(self._thor_buffer_in) >= 3:
-                THOR_DEBUG("Nueva conexion, data: ", repr(self._thor_buffer_in))
+                THOR_DEBUG("Socks5: Nueva conexion, data: ", repr(self._thor_buffer_in))
 
                 bytes_count = 2
                 version, nmethods = struct.unpack(">BB",
@@ -100,15 +195,12 @@ class ThorProtocol(Protocol):
                 # FIXME: Solo acepto conexiones SOCKS versión 5
                 #
                 if version != 0x05:
-                    THOR_ERROR("Solo se aceptan conexiones SOCKS v5, " + \
+                    raise ThorFatalException("Solo se aceptan conexiones SOCKS v5, " + \
                         " solicitada: %d" % version)
-                    self.transport.loseConnection()
-                    return
 
+                
                 if nmethods < 1:
-                    THOR_DEBUG("No hay metodos de conexion")
-                    self.transport.loseConnection()
-                    return
+                    raise ThorFatalException("No hay metodos de conexion")
 
                 bytes_count += nmethods
                 if len(self._thor_buffer_in) < bytes_count:
@@ -120,12 +212,10 @@ class ThorProtocol(Protocol):
                 # FIXME: Solo acepto conexiones anonimas
                 #
                 if 0x00 not in method_list:
-                    THOR_DEBUG("Metodo de conexion no encontrado")
-                    self.transport.loseConnection()
-                    return
+                    raise ThorFatalException("Metodo de conexion no encontrado")
 
                 self._thor_buffer_in = self._thor_buffer_in[bytes_count:]
-                self.transport.write(struct.pack(">BB", 0x05, 0x00))
+                self.prot.transport.write(struct.pack(">BB", 0x05, 0x00))
                 self._thor_state = 1
 
         # Estado 1: esperando los datos de conexion del cliente
@@ -138,19 +228,15 @@ class ThorProtocol(Protocol):
                 # FIXME: Solo Socks v5, comando CONNECT y conexiones IPv4.
                 #
                 if ver != 0x05 or rsv != 0x00:
-                    THOR_ERROR("Solo se aceptan conexiones SOCKS v5")
-                    self.transport.loseConnection()
-                    return
+                    raise ThorFatalException("Solo se aceptan conexiones SOCKS v5")
 
-                if cmd != 0x01:
-                    THOR_INFO("Solo se aceptan los comandos: CONNECT")
-                    self.transport.loseConnection()
-                    return
+                if cmd != 0x01 or cmd != 0x03:
+                    self._sendSocksReply(SOCKS5_REPLY_CMD_UNSUPPORTED)
+                    raise ThorFatalException("Solo se aceptan los comandos: CONNECT, UDP")
 
                 if atyp != 0x01:
-                    THOR_INFO("Solo se aceptan conexiones IPv4")
-                    self.transport.loseConnection()
-                    return
+                    self._sendSocksReply(SOCKS5_ADDRESS_NOT_SUPPORTED)
+                    raise ThorFatalException("Solo se aceptan conexiones IPv4")
 
                 byte_count += 6
                 dest_addr, dest_port = struct.unpack(">LH", self._thor_buffer_in[4:10])
@@ -164,8 +250,10 @@ class ThorProtocol(Protocol):
                 self._thor_state = 2
                 self._thor_buffer_in = self._thor_buffer_in[byte_count:]
 
-                reactor.connectTCP(dest_addr, dest_port,
-                    ThorClientFactory(self, dest_addr, dest_port, dest_port == 80))
+                if cmd == 0x01:
+                    self.prot.connectRemoteTCP(dest_addr, dest_port)
+                elif cmd == 0x03:
+                    self.prot.connectRemoteUDP(dest_addr, dest_port)
 
         # Estado 2: esperando conectarse al cliente
         if self._thor_state == 2:
@@ -176,10 +264,13 @@ class ThorProtocol(Protocol):
             self._flushData()
 
     def _sendSocksReply(self, rep):
-        self.transport.write(struct.pack(">BBBBLH", 
+        """
+        Respuesta al pedido de conexion.
+        """
+        self.prot.transport.write(struct.pack(">BBBBLH",
             0x05, rep, 0x00, 0x01, 0x0L, 0x0))
 
-    def _remoteConnectionMade(self):
+    def remoteConnectionMade(self):
         if self._thor_state == 2:
             self._thor_state = 3
             self._sendSocksReply(0x00)
@@ -188,9 +279,48 @@ class ThorProtocol(Protocol):
             THOR_ERROR("Error fatal: estado invalido: %d" % self._thor_state)
             THOR_STOP()
 
+    def isConnected(self):
+        return self._thor_state == 3
+
+class ThorProtocol(Protocol):
+    def __init__(self, *args, **kwargs):
+        # Estoy usando "_thor" de prefijo porque no conozco las variables de 
+        # instancia de Protocol.
+
+        self._thor_tunnel = TunnelHandlerSocks4(self)
+        self._thor_client_bytes = 0
+        self._thor_server_bytes = 0
+        self._thor_client = None
+
+    def dataReceived(self, data):
+        self._thor_client_bytes += len(data)
+        self._thor_tunnel.dataReceived(data)
+
+    def connectionMade(self):
+        pass
+
+    def connectionLost(self, reason):
+        if self._thor_client is not None:
+            cli = self._thor_client
+            self._thor_client = None
+            cli.transport.loseConnection()
+
+    def remoteConnectionMade(self):
+        self._thor_tunnel.remoteConnectionMade()
+
     def _flushData(self):
         self._thor_client.transport.write(self._thor_buffer_in)
         self._thor_buffer_in = ""
+
+    def clientSendData(self, data):
+        self._thor_client.transport.write(data)
+
+    def connectRemoteTCP(self, dest_addr, dest_port):
+        reactor.connectTCP(dest_addr, dest_port,
+            ThorClientFactory(self, dest_addr, dest_port, dest_port == 80))
+
+    def connectRemoteUDP(self, dest_addr, dest_port):
+        pass
 
 class ThorClient(Protocol):
     """
@@ -208,7 +338,7 @@ class ThorClient(Protocol):
 
     def connectionMade(self):
         THOR_DEBUG("ThorClient :: connectionMade")
-        self._thor_prot._remoteConnectionMade()
+        self._thor_prot.remoteConnectionMade()
 
     def connectionLost(self, reason):
         THOR_DEBUG("ThorClient :: connectionLost")
@@ -231,8 +361,6 @@ class ThorHammerClient(ThorClient):
     def connectionMade(self):
         THOR_DEBUG("ThorHammerClient :: connectionMade")
         self._thor_is_waiting = True
-
-        self.transport.write(self._thor_prot._thor_buffer_in)
         reactor.callLater(THOR_PATIENCE, self.timeoutOnConnect, True)
 
     def connectionLost(self, reason):
@@ -247,12 +375,12 @@ class ThorHammerClient(ThorClient):
         if self._thor_is_waiting:
             THOR_DEBUG("timeoutOnConnect: ", timeOut)
 
-            # Si, estoy accediendo a variables privadas. Si, esta un poco atado con alambre.
-            # Si, este software nunca deberia haber sido escrito pero cierto ISP esta roto.
+            # Si, estoy accediendo a variables privadas.
+            # Si, esta un poco atado con alambre.
+            # Si, este software nunca deberia haber sido escrito pero el ISP esta roto.
 
             self._thor_is_waiting = False
-            self._thor_prot._thor_buffer_in = ""
-            self._thor_prot._remoteConnectionMade()
+            self._thor_prot.remoteConnectionMade()
 
 class ThorClientFactory(ClientFactory):
     def __init__(self, thor_prot, host, port, retry):
@@ -288,7 +416,7 @@ class ThorClientFactory(ClientFactory):
     def _thorReconnect(self, connector):
         THOR_DEBUG("ThorClientFactory :: _thorReconnect", connector)
 
-        if self._thor_prot._thor_state == 3:
+        if self._thor_prot._thor_tunnel.isConnected():
             # Llegado a este punto la conexion fue exitosa y no hace falta
             # seguir insistiendo.
             self._thor_prot.transport.loseConnection()
