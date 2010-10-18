@@ -7,7 +7,7 @@ Hammer of Thor: Proxy SOCKS v4, v5
 Website: http://code.google.com/p/hammerofthor/
 Licencia: GNU GPL v3.
 
-    Hammer of Thor - Simple SOCKS v5 Proxy
+    Hammer of Thor - Simple SOCKS v4, v5 Proxy
 
     Copyright (C) 2010 Alejandro Santos
 
@@ -287,14 +287,40 @@ class ThorProtocol(Protocol):
         # Estoy usando "_thor" de prefijo porque no conozco las variables de 
         # instancia de Protocol.
 
-        self._thor_tunnel = TunnelHandlerSocks4(self)
+        self._thor_tunnel = None
         self._thor_client_bytes = 0
         self._thor_server_bytes = 0
         self._thor_client = None
+        self._thor_tmp_buffer = ""
+
+    def _detectTunnelVersion(self):
+        data = self._thor_tmp_buffer
+
+        if len(data) < 1:
+            return
+
+        # FIXME: Buscar cual es la mejor forma de que corra como proxy transparente.
+
+        if ord(data[0]) == 4:
+            #SOCKS v4
+            self._thor_tunnel = TunnelHandlerSocks4(self)
+        elif ord(data[0]) == 5:
+            self._thor_tunnel = TunnelHandlerSocks5(self)
+
 
     def dataReceived(self, data):
         self._thor_client_bytes += len(data)
-        self._thor_tunnel.dataReceived(data)
+
+        if self._thor_tunnel is None:
+            self._thor_tmp_buffer += data
+            data = self._thor_tmp_buffer
+            self._detectTunnelVersion()
+
+            if self._thor_tunnel is not None:
+                self._thor_tmp_buffer = None
+
+        if self._thor_tunnel is not None:
+            self._thor_tunnel.dataReceived(data)
 
     def connectionMade(self):
         pass
@@ -385,8 +411,8 @@ class ThorHammerClient(ThorClient):
 class ThorClientFactory(ClientFactory):
     def __init__(self, thor_prot, host, port, retry):
         self._thor_prot = thor_prot
-        self._thor_host = host
-        self._thor_port = port
+        self._thor_dest_host = host
+        self._thor_dest_port = port
         self._thor_counter = 0
         self._thor_retry = retry
 
@@ -406,19 +432,24 @@ class ThorClientFactory(ClientFactory):
     def clientConnectionLost(self, connector, reason):
         THOR_DEBUG("clientConnectionLost: ", connector, reason)
 
-        self._thorReconnect(connector)
+        self._thorReconnect(connector, False)
 
     def clientConnectionFailed(self, connector, reason):
         THOR_DEBUG("clientConnectionFailed: ", connector, reason)
 
-        self._thorReconnect(connector)
+        self._thorReconnect(connector, True)
 
-    def _thorReconnect(self, connector):
+    def _thorReconnect(self, connector, wasFailed):
         THOR_DEBUG("ThorClientFactory :: _thorReconnect", connector)
 
         if self._thor_prot._thor_tunnel.isConnected():
             # Llegado a este punto la conexion fue exitosa y no hace falta
             # seguir insistiendo.
+            self._thor_prot.transport.loseConnection()
+            return
+
+        if wasFailed and THOR_MAX_ATTEMPTS - self._thor_counter >= 2:
+            # Si falla antes de que se establezca es un error normal, lo propago.
             self._thor_prot.transport.loseConnection()
             return
 
