@@ -53,9 +53,19 @@ def THOR_PRINT(*args, **kwargs):
 
 THOR_PRINT_NULL = lambda *args, **kwargs: None
 
-THOR_ERROR = THOR_PRINT
-THOR_INFO = THOR_PRINT
-THOR_DEBUG = THOR_PRINT
+if os.environ.get('THOR_DEBUG') is not None:
+    THOR_ENABLE_DEBUG=os.environ.get('THOR_DEBUG').lower() in ['true', '1']
+else:
+    THOR_ENABLE_DEBUG=False
+
+if THOR_ENABLE_DEBUG:
+    THOR_ERROR = THOR_PRINT
+    THOR_INFO = THOR_PRINT
+    THOR_DEBUG = THOR_PRINT
+else:
+    THOR_ERROR = THOR_PRINT
+    THOR_INFO = THOR_PRINT
+    THOR_DEBUG = THOR_PRINT_NULL
 
 SOCKS5_REPLY_CMD_UNSUPPORTED = 0x07
 SOCKS5_ADDRESS_NOT_SUPPORTED = 0x08
@@ -448,10 +458,12 @@ class ThorClientFactory(ClientFactory):
             self._thor_prot.transport.loseConnection()
             return
 
+        """
         if wasFailed and THOR_MAX_ATTEMPTS - self._thor_counter >= 2:
             # Si falla antes de que se establezca es un error normal, lo propago.
             self._thor_prot.transport.loseConnection()
             return
+        """
 
         THOR_INFO("Thor esta esperando")
 
